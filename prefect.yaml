@@ -20,7 +20,7 @@ pull:
 - prefect.deployments.steps.git_clone:
     id: clone-step
     repository: https://gitee.com/ider001/wikimedia-dump-flow.git
-    branch: master
+    branch: main
     access_token: null
 
 # the deployments section allows you to provide configuration for deploying flows
