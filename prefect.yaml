@@ -19,7 +19,7 @@ pull:
     
 - prefect.deployments.steps.git_clone:
     id: clone-step
-    repository: https://gitee.com/ider001/prefex-v3-deply-test.git
+    repository: https://gitee.com/ider001/wikimedia-dump-flow.git
     branch: master
     access_token: null
 
