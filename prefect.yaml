@@ -26,11 +26,11 @@ pull:
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
 - name: "wikimedia-downloader"
-  version: null
+  version: "0.0.1"
   tags:
     - "wikimedia"
     - "downloader"
-  description: null
+  description: "wikimedia dump downloader flow"
   schedule:
     cron: "39 17 * * *"
     timezone: "UTC"

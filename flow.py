@@ -60,9 +60,12 @@ def download_and_verify(file_info):
     # 'sha1': '316c2bf3794f356119990e778e3dc035ee37ea65',
     # 'title': 'enwiki-20250601-page.sql.gz',
     # 'output_folder_path': PosixPath('/tmp/20250601')}
-
-    print(
-        f"start download file {file_info["title"]}",
+    logger = get_run_logger()
+    if 'url' not in file_info:
+        logger.error(f"File info does not contain 'url' key. file_info: {file_info}")
+        return
+    logger.info(
+        f"start download file {file_info['title']} from {file_info['url']}",
     )
     output_folder = file_info["output_folder_path"]
     dowmload_file = output_folder.joinpath(file_info["title"])
