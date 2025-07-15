@@ -128,7 +128,8 @@ def wikimedia_dumper(output_folder: str, proxy: str = ""):
         "categorylinkstable",
         "metahistory7zdump",
     ]:
-        dump_data_map[key] = dumpstatus_data["jobs"][key]
+        if value:=dumpstatus_data["jobs"].get(key):
+            dump_data_map[key] = value
 
     # todo
     # maybe anaylize the processing of the dumpstatus.json file
