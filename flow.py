@@ -10,7 +10,7 @@ from prefect.futures import wait
 from prefect.task_runners import ThreadPoolTaskRunner
 from prefect.cache_policies import INPUTS, TASK_SOURCE
 
-CACHE_POLICY = (INPUTS + TASK_SOURCE).configure(key_storage="big-dataset-cache-keys")
+# CACHE_POLICY = (INPUTS + TASK_SOURCE).configure(key_storage="big-dataset-cache-keys")
 
 WIKIMEDIA_MIRRORS = [
     "https://dumps.wikimedia.org",
@@ -30,7 +30,8 @@ def md5(file_path: str):
     return hash_md5.hexdigest()
 
 
-@task(cache_policy=CACHE_POLICY)
+# @task(cache_policy=CACHE_POLICY)
+@task()
 def download_file(file_url, save_path: pathlib.Path):
     logger = get_run_logger()
 
@@ -62,7 +63,7 @@ def download_and_verify(file_info):
     # 'output_folder_path': PosixPath('/tmp/20250601')}
     logger = get_run_logger()
     if 'url' not in file_info:
-        logger.error(f"File info does not contain 'url' key. file_info: {file_info}")
+        logger.warning(f"File info does not contain 'url' key. file_info: {file_info}")
         return
     logger.info(
         f"start download file {file_info['title']} from {file_info['url']}",
@@ -111,6 +112,9 @@ def wikimedia_dumper(output_folder: str, proxy: str = ""):
     #     logger.info("download complete as: %s", data)
     #     return
 
+    logger.info(
+        f"output folder: {output_folder_path}, version_flag: {version_flag}",
+    )
     dump_status_file = output_folder_path.joinpath("dumpstatus.json")
     dwonload_dumpstatus(dump_status_file, version_flag)
 
@@ -143,6 +147,7 @@ def wikimedia_dumper(output_folder: str, proxy: str = ""):
             elem["title"] = title
             elem["output_folder_path"] = output_folder_path
             files_to_download.append(elem)
+    logger.info(f"files to download: {len(files_to_download)}")
     ret = download_and_verify.map(files_to_download)
     wait(ret)
     logger.info("download complete")
