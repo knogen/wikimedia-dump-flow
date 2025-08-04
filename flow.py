@@ -19,6 +19,8 @@ WIKIMEDIA_MIRRORS = [
     "https://mirror.clarkson.edu",
     "https://wikimedia.mirror.clarkson.edu",
     "https://wikipedia.mirror.pdapps.org",
+    "https://mirror.accum.se/mirror/wikimedia.org/dumps",
+    "https://wikidata.aerotechnet.com",
 ]
 
 
@@ -32,7 +34,7 @@ def md5(file_path: str):
 
 # @task(cache_policy=CACHE_POLICY)
 @task()
-def download_file(file_url, save_path: pathlib.Path):
+def download_file(file_url, save_path: pathlib.Path, proxy: str = ""):
     logger = get_run_logger()
 
     mirror_list = WIKIMEDIA_MIRRORS.copy()
@@ -40,21 +42,54 @@ def download_file(file_url, save_path: pathlib.Path):
 
     for mirror_url in mirror_list:
         try:
+            path_obj = pathlib.Path(save_path)
+            headers = {}
+            file_mode = "wb"  # 默认为二进制写入模式
+            resumed_size = 0
+
+            # 1. 检查文件是否存在，如果存在，则设置 Range 请求头和文件追加模式
+            if path_obj.exists():
+                resumed_size = path_obj.stat().st_size
+                headers["Range"] = f"bytes={resumed_size}-"
+                file_mode = "ab"  # 切换为二进制追加模式
+                logger.info(f"发现已下载文件，将从 {resumed_size} 字节处继续下载...")
+        
             url = mirror_url + file_url
-            with httpx.stream("GET", url) as response:
+            logger.info(f"start download '{save_path}' from {url}")
+
+            with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=30,  proxy=proxy) as response:
+                # 如果服务器返回 200 OK 且我们请求了续传，说明服务器不支持，需从头开始
+                if response.status_code == 200 and resumed_size > 0:
+                    logger.info("服务器不支持断点续传，将重新从头开始下载。")
+                    resumed_size = 0
+                    file_mode = "wb"
+
                 response.raise_for_status()
-                with open(save_path, "wb") as f:
-                    for chunk in response.iter_bytes():
+
+                # 获取文件总大小用于进度条
+                # 对于断点续传 (206)，Content-Length 是剩余部分的大小
+                remaining_size = int(response.headers.get("Content-Length", 0))
+                total_size = resumed_size + remaining_size
+
+                logger.info(f"文件总大小: {total_size / 1024 / 1024:.2f} MB")
+
+                # 2. 以正确的模式打开文件并写入数据
+                with open(path_obj, file_mode) as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
                         f.write(chunk)
+            
+            logger.info(f"文件 '{save_path}' 下载完成。 ✨")
+
             return
         except Exception as exc:
-            logger.info(f"Error response {exc} while requesting {url}.")
+            logger.info(f"proxy download fail:{url}, proxy:{proxy}, try next mirror")          
 
-    raise Exception("All mirrors failed")
+
+    raise Exception(f"All mirrors failed: {file_url}")
 
 
 @task(log_prints=True)
-def download_and_verify(file_info):
+def download_and_verify(file_info, proxy: str = ""):
     # {'size': 2315628993,
     # 'url': '/enwiki/20250601/enwiki-20250601-page.sql.gz',
     # 'md5': 'f72c990b51c964dfd321b78f2193670c',
@@ -76,8 +111,10 @@ def download_and_verify(file_info):
             f"file {dowmload_file} exists, skip download",
         )
         return
-
-    download_file(file_info["url"], dowmload_tmp_file)
+    try:
+        download_file(file_info["url"], dowmload_tmp_file)
+    except Exception as exc:
+        download_file(file_info["url"], dowmload_tmp_file, proxy)
 
     file_md5 = md5(dowmload_tmp_file)
     if file_md5 == file_info["md5"]:
@@ -85,24 +122,35 @@ def download_and_verify(file_info):
 
 
 @task
-def dwonload_dumpstatus(dump_status_file: str, version_flag: str):
+def dwonload_dumpstatus(dump_status_file: str, version_flag: str, lang:str="en", proxy: str = ""):
+    logger = get_run_logger()
+    url = f"https://dumps.wikimedia.org/{lang}wiki/{version_flag}/dumpstatus.json"
+    try:
+        with httpx.Client() as client:
+            response = client.get(url)
+            response.raise_for_status()  # 如果不是 200，会抛异常
+            with open(dump_status_file, "wb") as f:
+                f.write(response.content)
+                return
+    except Exception as exc:
+        logger.error(f"download dumpstatus.json fail, error: {exc}")
+        
+    if proxy:
+        with httpx.Client(proxy=proxy) as client:
+            response = client.get(url)
+            response.raise_for_status()  # 如果不是 200，会抛异常
+            with open(dump_status_file, "wb") as f:
+                f.write(response.content)
+                return
 
-    url = f"https://dumps.wikimedia.org/enwiki/{version_flag}/dumpstatus.json"
-    with httpx.Client() as client:
-        response = client.get(url)
-        response.raise_for_status()  # 如果不是 200，会抛异常
-        with open(dump_status_file, "wb") as f:
-            f.write(response.content)
 
-
-@flow(task_runner=ThreadPoolTaskRunner(max_workers=3))
-def wikimedia_dumper(output_folder: str, proxy: str = ""):
+def wikimedia_dumper_task(output_folder: str, proxy: str = "",lang:str="en"):
     logger = get_run_logger()
     logger.info("start wikimedia dumper")
     day_before_15 = datetime.datetime.now() - datetime.timedelta(days=8)
     version_flag = day_before_15.strftime("%Y%m01")
 
-    output_folder_path = pathlib.Path(output_folder).joinpath(version_flag)
+    output_folder_path = pathlib.Path(output_folder).joinpath(lang).joinpath(version_flag)
     output_folder_path.mkdir(exist_ok=True)
 
     # space_stats_flag = output_folder_path.joinpath("COMPLETE.txt")
@@ -116,22 +164,22 @@ def wikimedia_dumper(output_folder: str, proxy: str = ""):
         f"output folder: {output_folder_path}, version_flag: {version_flag}",
     )
     dump_status_file = output_folder_path.joinpath("dumpstatus.json")
-    dwonload_dumpstatus(dump_status_file, version_flag)
+    dwonload_dumpstatus(dump_status_file, version_flag, lang, proxy)
 
     with open(dump_status_file, "rt") as f:
         dumpstatus_data = json.load(f)
 
     dump_data_map = {}
     for key in [
+        "categorylinkstable",
+        "pagelinkstable",
         "pagetable",
         "categorytable",
-        "categorylinkstable",
         "redirecttable",
         "geotagstable",
         "articlesdumprecombine",
         "langlinkstable",
         "externallinkstable",
-        "pagelinkstable",
         "categorylinkstable",
         "metahistory7zdump",
     ]:
@@ -148,15 +196,16 @@ def wikimedia_dumper(output_folder: str, proxy: str = ""):
             elem["output_folder_path"] = output_folder_path
             files_to_download.append(elem)
     logger.info(f"files to download: {len(files_to_download)}")
-    ret = download_and_verify.map(files_to_download)
+    ret = download_and_verify.map(files_to_download, proxy)
     wait(ret)
     logger.info("download complete")
 
 
-from prefect.client.schemas.objects import (
-    ConcurrencyLimitConfig,
-    ConcurrencyLimitStrategy,
-)
+@flow(task_runner=ThreadPoolTaskRunner(max_workers=3))
+def wikimedia_dumper(output_folder: str, proxy: str = "",):
+    wikimedia_dumper_task(output_folder, proxy,"zh")
+    wikimedia_dumper_task(output_folder, proxy,"en")
+
 
 if __name__ == "__main__":
     # wikimedia_dumper.serve(
@@ -167,4 +216,4 @@ if __name__ == "__main__":
     #     tags=["wikimedia", "crawler"],
     #     cron="39 17 * * *",
     # )
-    wikimedia_dumper("/mnt/st01/wikipeida_download")
+    wikimedia_dumper("/mnt/st01/wikipeida_download",proxy="http://192.168.1.230:10808")
