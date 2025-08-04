@@ -26,13 +26,13 @@ pull:
 # the deployments section allows you to provide configuration for deploying flows
 deployments:
 - name: "wikimedia-downloader"
-  version: "0.0.1"
+  version: "0.0.2"
   tags:
     - "wikimedia"
     - "downloader"
   description: "wikimedia dump downloader flow"
   schedule:
-    cron: "39 17 * * *"
+    cron: "39 21 * * *"
     timezone: "UTC"
   flow_name: null
   entrypoint: "flow.py:wikimedia_dumper"

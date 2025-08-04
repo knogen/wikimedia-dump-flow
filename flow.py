@@ -1,3 +1,4 @@
+from typing import Optional
 from prefect import flow, task, get_run_logger
 import hashlib
 import datetime
@@ -144,9 +145,9 @@ def dwonload_dumpstatus(dump_status_file: str, version_flag: str, lang:str="en",
                 return
 
 
-def wikimedia_dumper_task(output_folder: str, proxy: str = "",lang:str="en"):
+def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str="en"):
     logger = get_run_logger()
-    logger.info("start wikimedia dumper")
+    logger.info(f"start wikimedia dumper: {lang}")
     day_before_15 = datetime.datetime.now() - datetime.timedelta(days=3)
     version_flag = day_before_15.strftime("%Y%m01")
 
@@ -202,9 +203,9 @@ def wikimedia_dumper_task(output_folder: str, proxy: str = "",lang:str="en"):
 
 
 @flow(task_runner=ThreadPoolTaskRunner(max_workers=3))
-def wikimedia_dumper(output_folder: str, proxy: str = "",):
-    wikimedia_dumper_task(output_folder, proxy,"zh")
-    wikimedia_dumper_task(output_folder, proxy,"en")
+def wikimedia_dumper(output_folder: str, proxy: Optional[str] = None):
+    wikimedia_dumper_task(output_folder,proxy = proxy,lang = "zh")
+    wikimedia_dumper_task(output_folder, proxy = proxy,lang = "en")
 
 
 if __name__ == "__main__":
@@ -216,4 +217,4 @@ if __name__ == "__main__":
     #     tags=["wikimedia", "crawler"],
     #     cron="39 17 * * *",
     # )
-    wikimedia_dumper("/mnt/st01/wikipeida_download",proxy="http://192.168.1.230:10808")
+    wikimedia_dumper(output_folder="/mnt/st01/wikipeida_download",proxy="http://192.168.1.230:10808")
