@@ -147,7 +147,7 @@ def dwonload_dumpstatus(dump_status_file: str, version_flag: str, lang:str="en",
 def wikimedia_dumper_task(output_folder: str, proxy: str = "",lang:str="en"):
     logger = get_run_logger()
     logger.info("start wikimedia dumper")
-    day_before_15 = datetime.datetime.now() - datetime.timedelta(days=8)
+    day_before_15 = datetime.datetime.now() - datetime.timedelta(days=3)
     version_flag = day_before_15.strftime("%Y%m01")
 
     output_folder_path = pathlib.Path(output_folder).joinpath(lang).joinpath(version_flag)
