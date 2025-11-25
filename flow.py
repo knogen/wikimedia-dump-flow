@@ -32,10 +32,38 @@ def md5(file_path: str):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+@task
+def clean_stale_tmp_files(folder_path: pathlib.Path, days: int = 2):
+    """
+    删除指定目录下超过指定天数没有修改过的 _tmp 文件
+    """
+    logger = get_run_logger()
+    if not folder_path.exists():
+        return
+
+    # 计算时间阈值 (当前时间 - 指定天数)
+    threshold_timestamp = (datetime.datetime.now() - datetime.timedelta(days=days)).timestamp()
+    
+    # 查找所有 _tmp 结尾的文件
+    removed_count = 0
+    for file_path in folder_path.glob("*_tmp"):
+        try:
+            # 获取文件最后修改时间
+            mtime = file_path.stat().st_mtime
+            
+            if mtime < threshold_timestamp:
+                logger.warning(f"发现过期临时文件 (超过 {days} 天未更新), 正在删除: {file_path.name}")
+                file_path.unlink() # 删除文件
+                removed_count += 1
+        except Exception as e:
+            logger.error(f"无法删除文件 {file_path}: {e}")
+
+    if removed_count > 0:
+        logger.info(f"清理完成: 共删除了 {removed_count} 个过期的 _tmp 文件。")
 
 # @task(cache_policy=CACHE_POLICY)
 @task()
-def download_file(file_url, save_path: pathlib.Path, proxy: str = ""):
+def download_file(file_url, save_path: pathlib.Path, proxy: str = None):
     logger = get_run_logger()
 
     mirror_list = WIKIMEDIA_MIRRORS.copy()
@@ -83,7 +111,7 @@ def download_file(file_url, save_path: pathlib.Path, proxy: str = ""):
 
             return
         except Exception as exc:
-            logger.info(f"proxy download fail:{url}, proxy:{proxy}, try next mirror")          
+            logger.exception(f"proxy download fail:{url}, proxy:{proxy}, try next mirror")          
 
 
     raise Exception(f"All mirrors failed: {file_url}")
@@ -101,14 +129,14 @@ def download_and_verify(file_info, proxy: str = ""):
     if 'url' not in file_info:
         logger.warning(f"File info does not contain 'url' key. file_info: {file_info}")
         return
-    logger.info(
+    logger.debug(
         f"start download file {file_info['title']} from {file_info['url']}",
     )
     output_folder = file_info["output_folder_path"]
     dowmload_file = output_folder.joinpath(file_info["title"])
     dowmload_tmp_file = output_folder.joinpath(file_info["title"] + "_tmp")
     if dowmload_file.exists():
-        print(
+        logger.debug(
             f"file {dowmload_file} exists, skip download",
         )
         return
@@ -145,6 +173,7 @@ def dwonload_dumpstatus(dump_status_file: str, version_flag: str, lang:str="en",
                 return
 
 
+
 def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str="en"):
     logger = get_run_logger()
     logger.info(f"start wikimedia dumper: {lang}")
@@ -152,7 +181,9 @@ def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str
     version_flag = day_before_15.strftime("%Y%m01")
 
     output_folder_path = pathlib.Path(output_folder).joinpath(lang).joinpath(version_flag)
-    output_folder_path.mkdir(exist_ok=True)
+    output_folder_path.mkdir(exist_ok=True, parents=True)
+    
+    clean_stale_tmp_files(output_folder_path, days=2)
 
     # space_stats_flag = output_folder_path.joinpath("COMPLETE.txt")
     # if space_stats_flag.exists():
@@ -196,10 +227,10 @@ def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str
             elem["title"] = title
             elem["output_folder_path"] = output_folder_path
             files_to_download.append(elem)
-    logger.info(f"files to download: {len(files_to_download)}")
+    logger.debug(f"files to download: {len(files_to_download)}")
     ret = download_and_verify.map(files_to_download, proxy)
     wait(ret)
-    logger.info("download complete")
+    logger.debug("download complete")
 
 
 @flow(task_runner=ThreadPoolTaskRunner(max_workers=3))
@@ -217,4 +248,8 @@ if __name__ == "__main__":
     #     tags=["wikimedia", "crawler"],
     #     cron="39 17 * * *",
     # )
+    import os, logging
+    # Set logging level
+    os.environ['PREFECT_LOGGING_LEVEL'] = 'WARNING'
+    logging.basicConfig(level=logging.DEBUG)
     wikimedia_dumper(output_folder="/mnt/st01/wikipeida_download",proxy="http://192.168.1.230:10808")
