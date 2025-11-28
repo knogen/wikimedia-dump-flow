@@ -6,6 +6,7 @@ import pathlib
 import httpx
 import json
 import os
+import re
 import random
 from prefect.futures import wait
 from prefect.task_runners import ThreadPoolTaskRunner
@@ -61,7 +62,49 @@ def clean_stale_tmp_files(folder_path: pathlib.Path, days: int = 2):
     if removed_count > 0:
         logger.info(f"清理完成: 共删除了 {removed_count} 个过期的 _tmp 文件。")
 
-# @task(cache_policy=CACHE_POLICY)
+def continue_download_file(url, save_path: pathlib.Path, proxy: str = None):
+    logger = get_run_logger()
+    try:
+        path_obj = pathlib.Path(save_path)
+        headers = {}
+        file_mode = "wb"  # 默认为二进制写入模式
+        resumed_size = 0
+
+        # 1. 检查文件是否存在，如果存在，则设置 Range 请求头和文件追加模式
+        if path_obj.exists():
+            resumed_size = path_obj.stat().st_size
+            headers["Range"] = f"bytes={resumed_size}-"
+            file_mode = "ab"  # 切换为二进制追加模式
+            logger.info(f"发现已下载文件，将从 {resumed_size} 字节处继续下载...")
+    
+        logger.info(f"start download '{save_path}' from {url}")
+
+        with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=30,  proxy=proxy) as response:
+            # 如果服务器返回 200 OK 且我们请求了续传，说明服务器不支持，需从头开始
+            if response.status_code == 200 and resumed_size > 0:
+                logger.info("服务器不支持断点续传，将重新从头开始下载。")
+                resumed_size = 0
+                file_mode = "wb"
+
+            response.raise_for_status()
+
+            # 获取文件总大小用于进度条
+            # 对于断点续传 (206)，Content-Length 是剩余部分的大小
+            remaining_size = int(response.headers.get("Content-Length", 0))
+            total_size = resumed_size + remaining_size
+
+            logger.info(f"文件总大小: {total_size / 1024 / 1024:.2f} MB")
+
+            # 2. 以正确的模式打开文件并写入数据
+            with open(path_obj, file_mode) as f:
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    f.write(chunk)
+        
+        logger.info(f"文件 '{save_path}' 下载完成。 ✨")
+        return 
+    except Exception as exc:
+        logger.exception(f"proxy download fail:{url}, proxy:{proxy}, try next mirror")   
+
 @task()
 def download_file(file_url, save_path: pathlib.Path, proxy: str = None):
     logger = get_run_logger()
@@ -70,49 +113,8 @@ def download_file(file_url, save_path: pathlib.Path, proxy: str = None):
     random.shuffle(mirror_list)
 
     for mirror_url in mirror_list:
-        try:
-            path_obj = pathlib.Path(save_path)
-            headers = {}
-            file_mode = "wb"  # 默认为二进制写入模式
-            resumed_size = 0
-
-            # 1. 检查文件是否存在，如果存在，则设置 Range 请求头和文件追加模式
-            if path_obj.exists():
-                resumed_size = path_obj.stat().st_size
-                headers["Range"] = f"bytes={resumed_size}-"
-                file_mode = "ab"  # 切换为二进制追加模式
-                logger.info(f"发现已下载文件，将从 {resumed_size} 字节处继续下载...")
-        
-            url = mirror_url + file_url
-            logger.info(f"start download '{save_path}' from {url}")
-
-            with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=30,  proxy=proxy) as response:
-                # 如果服务器返回 200 OK 且我们请求了续传，说明服务器不支持，需从头开始
-                if response.status_code == 200 and resumed_size > 0:
-                    logger.info("服务器不支持断点续传，将重新从头开始下载。")
-                    resumed_size = 0
-                    file_mode = "wb"
-
-                response.raise_for_status()
-
-                # 获取文件总大小用于进度条
-                # 对于断点续传 (206)，Content-Length 是剩余部分的大小
-                remaining_size = int(response.headers.get("Content-Length", 0))
-                total_size = resumed_size + remaining_size
-
-                logger.info(f"文件总大小: {total_size / 1024 / 1024:.2f} MB")
-
-                # 2. 以正确的模式打开文件并写入数据
-                with open(path_obj, file_mode) as f:
-                    for chunk in response.iter_bytes(chunk_size=8192):
-                        f.write(chunk)
-            
-            logger.info(f"文件 '{save_path}' 下载完成。 ✨")
-
-            return
-        except Exception as exc:
-            logger.exception(f"proxy download fail:{url}, proxy:{proxy}, try next mirror")          
-
+        url = mirror_url + file_url
+        continue_download_file(url, save_path, proxy)        
 
     raise Exception(f"All mirrors failed: {file_url}")
 
@@ -185,13 +187,6 @@ def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str
     
     clean_stale_tmp_files(output_folder_path, days=2)
 
-    # space_stats_flag = output_folder_path.joinpath("COMPLETE.txt")
-    # if space_stats_flag.exists():
-    #     with open(space_stats_flag, "rt") as f:
-    #         data = f.read()
-    #     logger.info("download complete as: %s", data)
-    #     return
-
     logger.info(
         f"output folder: {output_folder_path}, version_flag: {version_flag}",
     )
@@ -233,10 +228,156 @@ def wikimedia_dumper_task(output_folder: str, proxy: Optional[str] = "",lang:str
     logger.debug("download complete")
 
 
+# 下载 https://dumps.wikimedia.org/wikidatawiki/entities/ latest-all.json.bz2 数据
+@task
+def wikidata_dumper_task(output_folder: str, proxy: Optional[str] = ""):
+    logger = get_run_logger()
+    logger.info(f"start wikidata dumper: {output_folder}")
+    
+    base_url = "https://dumps.wikimedia.org/wikidatawiki/entities/"
+    
+    # 1. 获取当前已经 dumper 的日期目录
+    # 我们需要请求 base_url 来解析其中的目录列表
+    try:
+        # 使用 httpx 获取目录页面
+        with httpx.Client(proxy=proxy, timeout=30) as client:
+            resp = client.get(base_url)
+            resp.raise_for_status()
+            html_content = resp.text
+    except Exception as e:
+        logger.error(f"Failed to fetch wikidata index page: {e}")
+        return
+
+    # 使用正则匹配所有日期目录 (格式: <a href="20251103/">)
+    date_pattern = re.compile(r'href="(\d{8})/"')
+    available_dates = sorted(set(date_pattern.findall(html_content)))
+    
+    if not available_dates:
+        logger.warning("No date directories found in wikidata index.")
+        return
+
+    # 2. 从当月初始日期 fold 开始，find the first valid date
+    now = datetime.datetime.now()
+    current_month_prefix = now.strftime("%Y%m") # e.g., "202511"
+    
+    # 筛选出本月的日期，或者你也可以策略性地选择最近的一个日期
+    # 这里实现：查找本月及之后的日期，取最早的一个
+    target_date_list = []
+    for date_str in available_dates:
+        if date_str.startswith(current_month_prefix):
+            target_date_list.append(date_str)
+            break # 找到本月第一个版本即停止
+    
+    # 如果本月还没有 (比如月初1号，dump 还没出)，可能需要回退找上个月最后一次？
+    # 根据你的注释 "从当月初始日期 fold 开始"，如果本月没有，我们暂不处理或打印警告
+    if not target_date_list:
+        logger.warning(f"No wikidata dump found for current month prefix: {current_month_prefix}")
+        return
+
+    logger.info(f"Selected wikidata version: {target_date_list}")
+
+    # 准备路径
+    # URL 路径结构: /wikidatawiki/entities/20251103/wikidata-20251103-all.json.bz2
+    for target_date in target_date_list:
+        file_name_base = f"wikidata-{target_date}"
+        json_filename = f"{file_name_base}-all.json.bz2"
+        md5_filename = f"{file_name_base}-md5sums.txt"
+    
+        
+        # 本地目录
+        local_version_dir = pathlib.Path(output_folder).joinpath("wikidata")
+        local_version_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 清理过期临时文件
+        clean_stale_tmp_files(local_version_dir, days=4)
+
+        # 定义本地文件路径
+        local_json_path = local_version_dir.joinpath(json_filename)
+        local_json_tmp_path = local_version_dir.joinpath(json_filename + "_tmp")
+        local_md5_path = local_version_dir.joinpath(md5_filename)
+        local_md5_tmp_path = local_version_dir.joinpath(md5_filename + "_tmp")
+
+        # 如果主文件已经存在，跳过
+        if local_json_path.exists():
+            logger.info(f"Target file {json_filename} already exists. Skipping.")
+            return
+
+        # -----------------------------------------------------------
+        # 3. Download wikidata-xxxx-md5sums.txt
+        # -----------------------------------------------------------
+        md5_url = f"{base_url}/{target_date}/{md5_filename}"
+        
+        # 如果没有 md5 文件，先下载
+        if not local_md5_path.exists():
+            try:
+                continue_download_file(md5_url, local_md5_tmp_path, proxy)
+                local_md5_tmp_path.rename(local_md5_path)
+            except Exception as e:
+                logger.error(f"Failed to download MD5 file: {e}")
+                raise e
+
+        # -----------------------------------------------------------
+        # 4. Parse MD5 to find the hash for the JSON file
+        # -----------------------------------------------------------
+        target_md5_hash = None
+        with open(local_md5_path, "r", encoding="utf-8") as f:
+            for line in f:
+                # md5sums.txt 格式通常是: "hash  filename" 或 "MD5 (filename) = hash"
+                # wikidata dump 通常是: "hash  filename"
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[-1].endswith(json_filename):
+                    target_md5_hash = parts[0]
+                    break
+        
+        if not target_md5_hash:
+            logger.error(f"Could not find MD5 hash for {json_filename} in {md5_filename}")
+            return
+        
+        logger.info(f"Expected MD5 for {json_filename}: {target_md5_hash}")
+
+        # -----------------------------------------------------------
+        # 5. Download wikidata-xxxx-all.json.bz2
+        # -----------------------------------------------------------
+        json_url = f"{base_url}/{target_date}/{json_filename}"
+        
+        try:
+            # 使用现有的 download_file (支持断点续传) 下载到 _tmp
+            continue_download_file(json_url, local_json_tmp_path, proxy)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning(f"404 Not Found: {json_url}")
+                continue
+            else:
+                logger.error(f"HTTP error: {e}")
+                raise e
+        except Exception as e:
+            logger.error(f"Failed to download JSON file: {e}")
+            raise e
+
+    # -----------------------------------------------------------
+    # 6. Verify and Rename
+    # -----------------------------------------------------------
+    logger.info("Verifying MD5 checksum...")
+    calculated_md5 = md5(str(local_json_tmp_path))
+    
+    if calculated_md5 == target_md5_hash:
+        logger.info("MD5 verification successful. Renaming file.")
+        local_json_tmp_path.rename(local_json_path)
+        logger.info(f"Successfully downloaded: {local_json_path}")
+    else:
+        logger.error(f"MD5 verification failed! Expected {target_md5_hash}, got {calculated_md5}")
+        # 校验失败通常意味着文件损坏，可以选择删除 _tmp 文件以便下次重试，或者保留以供检查
+        # local_json_tmp_path.unlink() 
+        raise Exception("MD5 mismatch")
+
+
+
 @flow(task_runner=ThreadPoolTaskRunner(max_workers=3))
 def wikimedia_dumper(output_folder: str, proxy: Optional[str] = None):
+    wikidata_dumper_task(output_folder, proxy = None)
     wikimedia_dumper_task(output_folder,proxy = proxy,lang = "zh")
     wikimedia_dumper_task(output_folder, proxy = proxy,lang = "en")
+
 
 
 if __name__ == "__main__":
