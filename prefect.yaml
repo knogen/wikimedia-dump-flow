@@ -37,7 +37,7 @@ deployments:
   flow_name: null
   entrypoint: "flow.py:wikimedia_dumper"
   parameters:
-    output_folder: "/mnt/st01/wikipeida_download"
+    output_folder: "/mnt/st01/wikipedia_download"
     proxy: "http://192.168.1.230:10808"
   work_pool:
     name: "process-pool"

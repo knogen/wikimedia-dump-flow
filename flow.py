@@ -383,7 +383,7 @@ def wikimedia_dumper(output_folder: str, proxy: Optional[str] = None):
 if __name__ == "__main__":
     # wikimedia_dumper.serve(
     #     name="wikimedia-downloader",
-    #     parameters={"output_folder": "/mnt/st01/wikipeida_download"},
+    #     parameters={"output_folder": "/mnt/st01/wikipedia_download"},
     #     # set env
     #     # job_variables={"env": {"NAME": "Marvin"}},
     #     tags=["wikimedia", "crawler"],
@@ -393,4 +393,4 @@ if __name__ == "__main__":
     # Set logging level
     os.environ['PREFECT_LOGGING_LEVEL'] = 'WARNING'
     logging.basicConfig(level=logging.DEBUG)
-    wikimedia_dumper(output_folder="/mnt/st01/wikipeida_download",proxy="http://192.168.1.230:10808")
+    wikimedia_dumper(output_folder="/mnt/st01/wikipedia_download",proxy="http://192.168.1.230:10808")

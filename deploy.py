@@ -17,7 +17,7 @@ if __name__ == "__main__":
         concurrency_limit=ConcurrencyLimitConfig(
             limit=3, collision_strategy=ConcurrencyLimitStrategy.ENQUEUE
         ),
-        parameters={"output_folder": "/mnt/st01/wikipeida_download", "proxy": "http://192.168.1.230:10808"},
+        parameters={"output_folder": "/mnt/st01/wikipedia_download", "proxy": "http://192.168.1.230:10808"},
         # set env
         # job_variables={"env": {"NAME": "Marvin"}},
         tags=["wikimedia", "crawler"],
