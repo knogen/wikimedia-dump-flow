@@ -7,4 +7,5 @@ requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
     "prefect>=3.4.10",
+    "py7zr>=1.0.0",
 ]
