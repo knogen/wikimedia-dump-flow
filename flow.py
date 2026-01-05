@@ -76,7 +76,7 @@ def verify_archive(file_path: pathlib.Path, file_type: str) -> bool:
             return True
 
     except (OSError, EOFError, py7zr.exceptions.Bad7zFile, Exception) as e:
-        logger.error(f"Integrity check failed for {file_path_str}. Error: {e}")
+        logger.error(f"Integrity check failed for {file_path}. Error: {e}")
         return False
 
 
@@ -299,6 +299,7 @@ def wikimedia_dumper_task(
         "externallinkstable",
         "categorylinkstable",
         "metahistory7zdump",
+        "linktargettable"
     ]:
         if value := dumpstatus_data["jobs"].get(key):
             dump_data_map[key] = value
