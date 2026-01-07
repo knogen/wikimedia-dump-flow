@@ -299,7 +299,8 @@ def wikimedia_dumper_task(
         "externallinkstable",
         "categorylinkstable",
         "metahistory7zdump",
-        "linktargettable"
+        "linktargettable",
+        "pagepropstable",
     ]:
         if value := dumpstatus_data["jobs"].get(key):
             dump_data_map[key] = value
